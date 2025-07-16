@@ -1,0 +1,110 @@
+[test_cases_kit_prompt_IV_and_OJF]
+content='''
+I have a competitive programming problem. To test the correctness of candidate programs, I need to create many test cases.
+
+Each test case is an input-output pair. The input part will be fully provided as stdin to the candidate program, and then the candidate output will be collected from stdout. In most cases, we determine the correctness of the program by comparing the candidate output with the output part of the test case (i.e., the reference output), while sometimes, we need to use a custom function to judge the correctness of the candidate output, instead.
+
+Note: Sometimes, a problem may require a single test case to contain multiple sub-tasks. For example: the first line of the input contains an integer $t\ (1 \leq t \leq 1000)$, followed by inputs of $t$ independent sub-tasks. The problem statement may sometimes refer to a sub-task as a "test case", but this is merely a difference in terminology.
+
+# Input Validator
+
+Suppose I have already written some input generator functions, and used them to generate many test case inputs. However, since they are randomly generated, they may not fully adhere to the constraints specified in the problem. In order to filter out invalid test cases, I need you to write a function `validate_input(input_str: str) -> bool`. Its input is the complete input string of a test case, and it returns a boolean indicating whether the input is valid.
+
+You should first clearly list all the constraints given in the problem statement, and then generate the function. Your function should check as many of the given constraints as possible, including the complex ones. However, if a constraint cannot be verified within a reasonable time complexity (e.g., $O(n)$ for $n \leq 10^6$, or $O(n^2)$ for $n \leq 10^3$), or if it makes the code too complex, then it can be skipped.
+
+**Pay close attention**: If the problem says "It's guaranteed that...", then what follows is precisely something that must be verified. This is because the so-called "guarantee" in the problem is typically enforced through the Input Validator, so you must validate it in `validate_input`. Of course, only if it can be done in reasonable time complexity.
+
+**Example 1**: Cicasso has $n$ sticks of lengths $l = (l_0, l_1, \dots, l_{n-1})$. But these $n$ sticks cannot form a convex polygon with non-zero area. You need to add one stick so that the resulting $n+1$ sticks can form such a polygon. The input consists of two lines: the first line is an integer $n$ ($3 \leq n \leq 10^5$). The second line has $n$ integers $l_i$ ($1 \leq l_i \leq 10^9$).
+
+The `validate_input` function should not only check that $n$ and $l_i$ are within the correct range and that there are exactly $n$ numbers in the second line, but also check that the $n$ sticks cannot form a convex polygon with non-zero area, i.e., that the longest stick is greater than or equal to the sum of the rest.
+
+**Example 2**: Suppose there is a permutation $p = (p_0, p_1, \dots, p_{n-1})$ of numbers from 1 to $n$ ($1 \leq n \leq 2 \times 10^5$). But you do not know the permutation $p$. Instead, you are given an array $s = (s_0, s_1, \dots, s_{n-1})$, where $s_i$ is the sum of all $p_j < p_i$ for $j < i$. Your task is to recover $p_i$.
+
+In theory, we should verify whether the $s_i$ values correspond to a valid permutation $p_i$, but that requires solving for $p_i$, which is too complex. Moreover, when generating inputs, it's quite easy to ensure that the $s_i$ comes from a valid permutation, so mistakes are unlikely. (Note: If verifying a constraint isn't too complex, you should still check it.) Therefore, we only need to check that $n$ is within the range and that $s$ has exactly $n$ elements.
+
+# Output Judging Function
+
+In most cases, we can determine whether the candidate program has passed the test case by comparing the `candidate_output` and `reference_output` as strings. The specific function is shown below.
+
+```python
+def output_judging_function(input_str: str, candidate_output: str, reference_output: str) -> bool:
+	normalized_candidate_output = '\n'.join(line.rstrip() for line in candidate_output.rstrip().splitlines())
+    normalized_reference_output = '\n'.join(line.rstrip() for line in reference_output.rstrip().splitlines())
+    return normalized_candidate_output == normalized_reference_output
+```
+
+However, for a few problems, the above `output_judging_function` does not work.
+
+**Example 1**: The problem asks to output a list (`List[int]`), but the order of elements in the list does not matter.
+
+In this case, we should convert both `candidate_output: str` and `reference_output: str` into `List[int]`, sort them, and then compare them.
+
+**Example 2**: Given a graph with both directed and undirected edges, you must make all undirected edges directed so that the resulting graph has no cycles. If it is possible, output "YES" and the resulting graph (list of directed edges), otherwise output "NO".
+
+Here, in `output_judging_function`, we should first determine from `reference_output` whether a solution is possible. If both `candidate_output` and `reference_output` say "YES", then we should also validate whether the graph provided in `candidate_output` is valid: check whether all edges exist in the input and whether the graph is acyclic (e.g., via DFS).
+
+**Example 3**: There are a total of $T$ sub-tasks. Each sub-task gives a pair of integers $l, r$ ($1 \leq l \leq r \leq 998244353$), and the goal is to find a pair of integers $x, y$ such that $l \leq x, y \leq r$, $x \ne y$, and $y$ is divisible by $x$. It is guaranteed that every sub-task has a valid solution.
+
+For each pair $x, y$ provided in the `candidate_output`, simply check whether they satisfy all the conditions mentioned in the problem statement. The `output_judging_function` for this problem does not need to use the `reference_output`; it only requires the `input_str`.
+
+You need to first analyze whether this particular problem requires a custom `output_judging_function` (different from the one given above). If yes, generate a custom `output_judging_function`. If not, don't output it. Sometimes only `input_str` is needed and `reference_output` is not required; other times only `reference_output` is needed and `input_str` is not required; and in some cases, both are needed. However, regardless of which ones are actually used, the function signature must always be: `output_judging_function(input_str: str, candidate_output: str, reference_output: str) -> bool`.
+
+Generally speaking, if a problem states "there are multiple possible answers, any one is acceptable," this implies that the problem requires a custom Output Judging Function. However, even if this is not explicitly mentioned, the problem may still actually require a custom Output Judging Function. You need to determine this yourself.
+
+---
+
+Also, when generating the above two functions, some known tricks or conclusions may be helpful, and you should derive them yourself if needed. I will give you the correct solution to the problem, and you can use it to derive certain conclusions or tricks.
+
+Your output format must strictly follow:
+
+# Analysis
+
+... (Analyze the problem, constraints, how to generate the Input Validator and Output Judging Function, etc.)
+
+# Result
+
+```json
+{
+	"input_validator": "A block of Python code containing the `validate_input` function. No other content.",
+	"needs_custom_output_judging_function": true or false,
+	"output_judging_function": "A block of Python code containing the `output_judging_function` function. No other content." or null
+}
+```
+
+---
+
+
+Note:
+* All your code should be in Python 3. 
+* Do not wrap the Python code in ```python```, just provide it plainly.
+* The Python code block under each field should be independent. In other words, they should not call or reference each other. If one block imports a library, other blocks must re-import it as needed.
+* In a Python block, you should first import the necessary libraries, and then start defining functions. Important: Do not place import statements inside the functions.
+* Only Python's built-in libraries are permitted for import.
+
+For example, a block of Python code for Input Validator should look like this:
+
+import ... (some modules)
+
+def input_validator(input_str: str) -> bool:
+	... (some code)
+
+A block of Python code for Output Judging Function (if needed) should look like this:
+
+import ... (some modules)
+
+def output_judging_function(input_str: str, candidate_output: str, reference_output: str) -> bool:
+	... (some code)
+
+---
+
+# Problem Statement
+
+{{ problem_statement }}
+
+---
+
+# Correct Program
+
+{{ correct_program }}
+
+'''

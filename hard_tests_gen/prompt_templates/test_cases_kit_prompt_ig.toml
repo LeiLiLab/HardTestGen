@@ -1,0 +1,168 @@
+[test_cases_kit_prompt_IG]
+content='''
+I have a competitive programming problem. To test candidate programs' correctness, I need to create many test cases.
+
+Each test case is an input-output pair. The input part will be fully provided as stdin to the candidate program, and then the candidate output will be collected from stdout. In most cases, we determine the correctness of the program by comparing the candidate output with the output part of the test case (i.e., the reference output), while sometimes, we need to use a custom function to judge the correctness of the candidate output, instead.
+
+Note: Sometimes, a problem may require a single test case to contain multiple sub-tasks. For example: the first line of the input contains an integer $t\ (1 \leq t \leq 1000)$, followed by inputs of $t$ independent sub-tasks. The problem statement may sometimes refer to a sub-task as a "test case", but this is merely a difference in terminology.
+
+Since the output part can be obtained by running correct programs, I only need you to help me generate the input part.
+
+The input should comply with the constraints given in the problem statement. I will give you an Input Validator that checks whether the input meets all the constraints specified in the problem statement. However, some constraints may not be checked by the Input Validator due to the difficulty of verification. Nevertheless, the input you generate should still comply with all of these constraints.
+
+# Small-Scale Input
+
+Small-scale input (SSI) refers to inputs of small size and scale, such as the input parts of the sample test cases given in the problem statement. You can get more SSIs by making minor modifications to these inputs. I need you to directly generate {{ num_SSI }} SSIs. Note: each SSI's length should be similar to the sample test cases' input, comply with the constraints given in the problem, and must not exceed 300 characters under any circumstances. If it is not possible to generate SSIs under this length limit, give up on generating them.
+
+# Regular Input
+
+## Regular Problems
+
+Regular Input (RI) refers to ordinary inputs, where all data is fully random and satisfies the constraints specified by the problem statement. You need to write a function `gen_regular_input() -> str`, and each time it is called, it should generate one random RI. You should ensure the generated input satisfies the constraints as much as possible, and may even sacrifice some degree of randomness to do so. But if trying to enforce a constraint leads to a function that cannot run within finite and reasonable time complexity (e.g., $O(n)$ for $n \leq 10^6$, or $O(n^2)$ for $n \leq 10^3$), then you may ignore that constraint. 
+
+**Pay close attention**: do not use `while` loops, especially ones that "keep generating until a constraint is satisfied." That can cause unlimited running time and make input generation fail.
+
+Some problems may require certain test cases to satisfy specific constraints (for example, 10% of test cases satisfy $n \leq 100$, 10% of the test cases satisfy $n \leq 1000$, etc.). Ignore this requirement. All test cases should be generated according to the most general constraints.
+
+Sometimes, generating input that satisfies the constraints requires some trick. You need to deduce it yourself (e.g., the example below about when $n$ sticks cannot form a convex polygon). I will give you the correct solution for the problem, and you can analyze it to discover some tricks or conclusions.
+
+Example 1: Cicasso has $n$ sticks ($3 \leq n \leq 10^5$) of lengths $l_i$ ($1 \leq l_i \leq 10^9$, for $i=0,1,\dots,n-1$). But these $n$ sticks cannot form a convex polygon of non-zero area. You need to add one more stick, so that the $n+1$ sticks can form a convex polygon of non-zero area. Output the minimum length of the additional stick.
+
+We can randomly generate $n \in [3, 10^5]$, but cannot randomly generate $l_i$, because such $l_i$ will likely not satisfy the constraint that the $n$ sticks cannot form a convex polygon of non-zero area. (It's not feasible to randomly generate and then filter, since it's too time-consuming.) We know that this constraint actually requires "the maximum $l_i$ is greater than or equal to the sum of all the other $l_i$." So we can first randomly sample a $l_0$ in $[n-1, 10^9]$ as the maximum $l_i$, then sample an integer $s \in [n-1, l_0]$ as the total sum of the other $l_1, \dots, l_{n-1}$, and finally use a partitioning trick to sample $l_1, \dots, l_{n-1}$ such that each element is at least 1 and the total sum is $s$. After that, we can shuffle the $l_i$ list.
+
+Example 2: There is a permutation $p = (p_0, p_1, ..., p_{n-1})$ of numbers from 1 to $n$ ($1 \leq n \leq 2\cdot 10^5$). You do not know this permutation, but you are given an array $s = (s_0,\dots,s_{n-1})$, where $s_i$ is the sum of all $p_j < p_i$ with $j < i$. Find $p_i$.
+
+We can first randomly generate $n \in [1, 2 \times 10^5]$. But we cannot directly generate an array $s_i$ randomly, because it is very unlikely to satisfy the constraints. Instead, we should reverse the process: first generate a random permutation $p_i$, and then compute the corresponding $s_i$.
+
+Example 3: This problem has $t \in [1, 1000]$ groups of independent sub-tasks. Each sub-task has an integer $n \in [1, 10^5]$ and an array $a$ of length $n$, where $a_i \in [1,10^5]$. The problem guarantees that the total sum of all $n$ across all $t$ sub-tasks does not exceed $2 \times 10^5$.
+
+We can first randomly generate $t \in [1, 1000]$. But at this point we cannot directly sample $t$ values of $n$ from $[1, 10^5]$, because their sum is likely to exceed $2 \times 10^5$. So instead, we randomly sample $s \in [t, 2\times 10^5]$, and then partition $s$ into $n_0, n_1, \dots, n_{t-1}$ such that each value is at least 1 and their sum is $s$.
+
+The following Python function demonstrates how, given positive integers $m$ and $s$, with $m \leq s$, one can randomly select $m$ positive integers such that their sum equals $s$. This is just for your reference.
+
+import random
+
+assert m <= s
+if m >= 2:
+	breaks = random.sample(range(1, s), m - 1)
+	breaks.sort()
+	results = [breaks[0]] + [breaks[i] - breaks[i - 1] for i in range(1, len(breaks))] + [s - breaks[-1]]
+else:
+	results = [s]
+
+## Multi-Category Output Problems
+
+For most problems, there is only one type of output. But there are some problems where outputs fall into multiple categories. These are called Multi-Category Output Problems. For example, some problems require the output to be "Yes" or "No", while others ask you to output the solution if it exists, otherwise output -1. In such cases, if we treat it as a regular problem and only write a single `gen_regular_input` function to generate inputs randomly, the resulting outputs will be very imbalanced. For example, the "Yes" outputs may require special construction, so nearly all generated inputs produce "No" as the answer. Thus, even a candidate program that always prints "No" would pass all test cases.
+
+For such problems, instead of one `gen_regular_input`, you need to design a series of functions `gen_regular_input_suffix`, where each function is responsible for generating inputs corresponding to one category of output. Each time a function is called, it should be able to generate—within reasonable time complexity—one random input that satisfies the constraints and whose corresponding output belongs to the corresponding category. If it is difficult to write a function that randomly generates some category, you can:
+
+1. Sacrifice randomness and perform special construction, even returning a fixed value each time
+or 2. Construct completely random data, similar to `gen_regular_input`
+
+Sometimes, a problem may require a single test case to contain multiple independent sub-tasks. In this case, each sub-task in each input generated by `gen_regular_input_suffix` should have the corresponding output category, e.g., all corresponding outputs should be "No".
+
+**Example 1**: Given two $n \times m$ binary matrices $A, B$. You can take the following operation: select a rectangle in matrix $A$ with height and width both at least 2, and flip the values at the four corner positions. You are to answer whether it's possible to make $A$ equal to $B$ using this operation. If possible, output "Yes" and the resulting matrix; otherwise, output "No".
+
+There are two outputs here: "Yes" and "No", corresponding to two categories of inputs. For the first category, we create `gen_regular_input_yes`, such that $A$ can be transformed into $B$. We can randomly construct matrix $A$, then perform $t$ operations (you can decide $t$ yourself, but it should not be too small or too large to avoid long generation time), where each operation selects a rectangle and flips the corners. Then the result becomes matrix $B$. For the second category, we write `gen_regular_input_no`, where $A$ cannot be transformed into $B$. One way is to randomly flip a position in matrix $B$ from the previous construction, which makes it impossible. This sacrifices randomness, but is simple and acceptable.
+
+**Example 2**: Given two numbers $n, m$ ($1\leq n \leq m\leq 5\times10^8$), you are to determine whether it is possible to transform $n$ into $m$ by multiplying by 2 and 3, and if so, output the minimum number of operations. Otherwise, output -1.
+
+There are two outputs: the minimum operation count, and -1. Correspondingly, we have two input generators. For the first case, where $n$ can be transformed into $m$, we can randomly generate $n\in [1, 5\times 10^8]$, then perform $t$ operations (multiply by 2 or 3) until $t$ steps are complete or further multiplication would exceed $5\times10^8$. The result becomes $m$. For the second case, where $n$ cannot be transformed into $m$, we can firstly randomly generate $m > n$, and then if $n$ can be transformed into $m$, simply set $m = m-1$.
+
+**Example 3**: Player A and B are playing tic-tac-toe. Player A goes first. You are given a $3 \times 3$ board, where each cell is ".", "X", or "0". Output the current state, one of: "first" (next move is A), "second" (next is B), "illegal" (not possible in a legal game), "the first player won", "the second player won", or "draw".
+
+There are 6 output categories, corresponding to 6 input categories. For the first output category, we need to create `gen_regular_input_first` where the next move is A's. We can randomly select $t\in[0, 4]$, then randomly place $t$ X's and $t$ 0's. This may lead to a win or illegal state, but we should NOT filter those during generation, because doing so would make the code too complex and slow. We only need most of the generated inputs to match this category. For the second category, place $t+1$ X's and $t$ 0's ($t\in [1,3]$). For the third category, it must be illegal, e.g. X and 0 count difference is too large, or both players have already won. We can create `gen_regular_input_illegal_mark_num` and `gen_regular_input_illegal_both_win`, etc. Do the same for the remaining categories.
+
+# Hacking Input
+
+Although Regular Input can guarantee large data size (because most of the time, the magnitude of random data is close to the maximum magnitude), for some problems, large-scale random data is not enough. We also need Hacking Input (HI). HI refers to inputs that are very tricky for candidate programs. Specifically, I need you to generate a series of functions `gen_hacking_input_suffix() -> str`. Each function is responsible for one type of HI. Every time each function is called, it should return one HI (can be random or fixed).
+
+Most types of HI are designed to cause brute-force candidate programs with insufficient optimization to run into time limits. Specifically, you should first list what kinds of straightforward or brute-force algorithms candidate programs might use, then construct inputs that would cause them to time out. Note: for most problems, RI data is enough to cause brute-force solutions to TLE, so you don't need to generate more. But for some problems, even though the brute-force algorithm's worst-case complexity is $O(n^2)$, due to rare worst-case inputs, the actual runtime is closer to $O(n)$. In these cases, you need to specially construct the data to repeatedly trigger the worst-case scenario for those brute-force algorithms.
+
+For some problems, we also need some types of HI to expose bugs caused by failure to handle edge cases. So you should think about whether there are any special edge cases (e.g., input $n=0$, or tree root is None, etc.). Note that the randomness of the input data itself at this time is not important. The key point is to expose the errors of the candidate programs.
+
+Of course, if the problem doesn't require any HI, then do not generate them. Especially if an HI is simply large-scale data, then you shouldn't bother. HI must be specially constructed—random RI should almost never produce them.
+
+**Example 1**: Given two numbers $n$ and $m$ ($1 \leq n \leq m \leq 5 \times 10^8$), the task is to determine whether it is possible to transform $n$ into $m$ by repeatedly multiplying $n$ by 2 or by 3. If possible, output the minimum number of operations required; otherwise, output -1.
+
+A brute-force approach that a candidate program might take is to use DFS, recursively trying to multiply $n$ by 2 or 3 until it becomes greater than or equal to $m$. If we randomly choose $n$ and $m$, the ratio between them is usually small, so this approach might still pass. One kind of effective HI is to set $n \in [1, 5]$ and $m \in [4 \times 10^8, 5 \times 10^8]$. This creates a large gap between $n$ and $m$, making the brute-force DFS approach inefficient. We can name the corresponding function `gen_hacking_input_small_n_big_m`. You should consider other types of HIs yourself.
+
+**Example 2**: Given a string $S$ of length $n \in [1, 10^5]$, we repeatedly perform the following operation: find two identical adjacent characters and delete them. This continues until there are no more identical adjacent characters in $S$.
+
+This problem should be solved using a stack to achieve an $O(n)$ time complexity. However, some candidate programs might use a brute-force simulation approach — repeatedly scanning the string and removing adjacent equal characters — which can result in a worst-case time complexity of $O(n^2)$. If we generate $S$ completely at random, it’s likely that there will only be a few pairs of identical adjacent characters. One kind of HI is to construct a string $S$ of a long even length (e.g., in $[5 \times 10^4, 10^5]$) and set `S[2*k] == S[2*k+1]`, thereby introducing a large number of adjacent equal character pairs. However, if the candidate program deletes all adjacent equal pairs in each round, the time complexity remains $O(n)$. Another HI is to construct a string $S$ of a long even length (e.g., in $[5 \times 10^4, 10^5]$) such that `S[:n//2] == S[n//2:][::-1]`, which forces the program to go through $n$ rounds to completely remove all characters, resulting in the true worst-case time complexity of $O(n^2)`. These two functions can be named `gen_hacking_input_pairwise_equal` and `gen_hacking_input_mirrored_halves`, respectively.
+
+Example 3: Given integer $w\in[1, 100]$, determine whether it can be written as the sum of two positive even integers.
+
+Candidate programs may output "Yes" when $w$ is even, and "No" when $w$ is odd. But a special case is $w=2$, which should be "No". So we can create `gen_hacking_input_two`, which always returns the string `"2"`.
+
+Important: if a type of HI is just setting data to their largest scale, then it is unnecessary.
+
+---
+
+Your output format must strictly be
+
+# Analysis
+
+...  
+(generally, you should first analyze the problem and data constraints, and then analyze how to generate Small-Scale Input, how to generate Regular Input, and whether the problem is a Multi-Category Output Problem (In that case, generate regular input generation functions for each output category. Make sure you mentioned the corresponding function names in the Analysis part). Then you should list some naive candidate programs and analyze how to generate Hacking Input.)
+
+# Result
+
+```json
+{
+	"small_scale_input": ["SSI1", "SSI2", ...],
+	"is_multi_category_output_problem": true or false,
+	"regular_input_generator": "a block of Python code containing a function gen_regular_input (for Regular Problem), or multiple functions gen_regular_input_suffix (for Multi-Category Output Problem)",
+	"hacking_input_generator": "a block of Python code containing multiple gen_hacking_input_suffix functions" or null (if no Hacking Input is needed)
+}
+```
+
+---
+
+Note:
+* All your code should be in Python 3. 
+* Do not wrap the Python code in ```python```, just provide it plainly.
+* The Python code block under each field should be independent. In other words, they should not call or reference each other. If one block imports a library, other blocks must re-import it as needed. 
+* In a Python block, you should first import the necessary libraries, and then start defining functions. Important: Do not place import statements inside the functions.
+* Only Python's built-in libraries are permitted for import.
+
+For example, a block of Python code for RI of Regular Problems should look like this:
+
+import ... (some modules)
+
+def gen_regular_input(input_str: str) -> bool:
+	... (some code)
+
+A block of Python code for RI of Multi-Category Output Problem may look like this:
+
+import ... (some modules)
+
+def gen_regular_input_some_suffix(input_str: str) -> bool:
+	... (some code)
+
+def gen_regular_input_some_suffix(input_str: str) -> bool:
+	... (some code)
+
+...
+
+And the Hacking Input block is similar.
+
+---
+
+# Problem Statement
+
+{{ problem_statement }}
+
+---
+
+# Correct Program
+
+{{ correct_program }}
+
+---
+
+# Input Validator
+
+{{ input_validator }}
+
+'''
