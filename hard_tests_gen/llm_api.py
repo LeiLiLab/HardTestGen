@@ -31,6 +31,7 @@ litellm_model_alias_map = {
 api_key_map = {
     'deepseek': None,
     'openai': None,
+    'anthropic': None,
 }
 
 def set_api_key():
@@ -40,6 +41,9 @@ def set_api_key():
     if 'openai' in api_key_map and api_key_map['openai'] is not None:
         os.environ['OPENAI_API_KEY'] = api_key_map['openai']
         logger.info(f"OpenAI API key set.")
+    if 'anthropic' in api_key_map and api_key_map['anthropic'] is not None:
+        os.environ['ANTHROPIC_API_KEY'] = api_key_map['anthropic']
+        logger.info(f"Anthropic API key set.")
 
 set_api_key()
 

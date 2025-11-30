@@ -13,6 +13,7 @@ import shutil
 from os.path import dirname, abspath, join
 import multiprocessing
 from functools import partial
+from pympler import asizeof
 
 import pathlib
 import toml
@@ -197,7 +198,7 @@ def force_delete_folder(folder_path: str) -> None:
                             pid = int(line.split()[1])
                             subprocess.run(["kill", "-9", str(pid)])
                 os.unlink(file_path)
-                logger.debug(f"{file_path} has been deleted.")
+                # logger.debug(f"{file_path} has been deleted.")
             except Exception as e:
                 logger.warning(f"Falied to delete file {file_path} with os.unlink. Error: {e}")
         for dir in dirs:
@@ -218,7 +219,8 @@ def force_delete_folder(folder_path: str) -> None:
     if os.path.exists(folder_path):
         logger.error(f"Failed to delete folder {folder_path}.")
     else:
-        logger.debug(f"Folder {folder_path} has been deleted successfully.")
+        # logger.debug(f"Folder {folder_path} has been deleted successfully.")
+        pass
 
 def load_prompt_templates(current_dir: str):
     """
@@ -269,8 +271,9 @@ def get_most_reliable_solutions(
             continue
         reliability_level_dict = {
             'atcoder_submission': 5,
+            'editorial': 5, # editorial from Jack Zeng
             'code_contests': 4,
-            'luogu_editorial': 3,
+            'luogu_editorial': 3, # editorial from Luogu
             'taco-verified': 2,
             'taco': 1,
         }

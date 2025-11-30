@@ -13,3 +13,4 @@ tenacity==9.0.0
 toml==0.10.2
 tqdm==4.66.4
 transformers==4.48.3
+pympler==1.1

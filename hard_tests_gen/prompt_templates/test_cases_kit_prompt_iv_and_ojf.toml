@@ -8,9 +8,9 @@ Note: Sometimes, a problem may require a single test case to contain multiple su
 
 # Input Validator
 
-Suppose I have already written some input generator functions, and used them to generate many test case inputs. However, since they are randomly generated, they may not fully adhere to the constraints specified in the problem. In order to filter out invalid test cases, I need you to write a function `validate_input(input_str: str) -> bool`. Its input is the complete input string of a test case, and it returns a boolean indicating whether the input is valid.
+Suppose I have already written some input generator functions, and used them to generate many test case inputs. However, since they are randomly generated, they may not fully adhere to the constraints specified in the problem. I need you to filter out invalid test cases. Given the problem described below, please identify value type and range, and list all constraints input data. Please generate a Python function `validate_input(input_str: str) -> bool` that checks the input against all constraints and returns a boolean indicating whether the input is valid according to the problem description.
 
-You should first clearly list all the constraints given in the problem statement, and then generate the function. Your function should check as many of the given constraints as possible, including the complex ones. However, if a constraint cannot be verified within a reasonable time complexity (e.g., $O(n)$ for $n \leq 10^6$, or $O(n^2)$ for $n \leq 10^3$), or if it makes the code too complex, then it can be skipped.
+However, if a constraint cannot be verified within a reasonable time complexity (e.g., $O(n)$ for $n \leq 10^6$, or $O(n^2)$ for $n \leq 10^3$), or if it makes the code too complex, then it can be skipped.
 
 **Pay close attention**: If the problem says "It's guaranteed that...", then what follows is precisely something that must be verified. This is because the so-called "guarantee" in the problem is typically enforced through the Input Validator, so you must validate it in `validate_input`. Of course, only if it can be done in reasonable time complexity.
 
@@ -23,6 +23,7 @@ The `validate_input` function should not only check that $n$ and $l_i$ are withi
 In theory, we should verify whether the $s_i$ values correspond to a valid permutation $p_i$, but that requires solving for $p_i$, which is too complex. Moreover, when generating inputs, it's quite easy to ensure that the $s_i$ comes from a valid permutation, so mistakes are unlikely. (Note: If verifying a constraint isn't too complex, you should still check it.) Therefore, we only need to check that $n$ is within the range and that $s$ has exactly $n$ elements.
 
 # Output Judging Function
+Given the problem described below, please generate an output judging function in Python to compare the equivalence of two output results. The function takes an input (can be a list of numbers or strings) and two results as arguments, and returns a boolean value. For example, you should use set comparison when the order of results does not matter.
 
 In most cases, we can determine whether the candidate program has passed the test case by comparing the `candidate_output` and `reference_output` as strings. The specific function is shown below.
 
@@ -85,7 +86,7 @@ For example, a block of Python code for Input Validator should look like this:
 
 import ... (some modules)
 
-def input_validator(input_str: str) -> bool:
+def validate_input(input_str: str) -> bool:
 	... (some code)
 
 A block of Python code for Output Judging Function (if needed) should look like this:
@@ -99,12 +100,12 @@ def output_judging_function(input_str: str, candidate_output: str, reference_out
 
 # Problem Statement
 
-{{ problem_statement }}
+{{ problem_specification }}
 
 ---
 
 # Correct Program
 
-{{ correct_program }}
+{{ oracle_program }}
 
 '''

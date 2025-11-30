@@ -169,11 +169,11 @@ def run_and_judge_code(
     outputs: List[str],
     integrated_executor: IntegratedExecutor,
     workspace: str,
-    run_time_limit: int = 5,
-    run_memory_limit: int = 1024 * 2,
-    judge_time_limit: int = 10,
-    judge_memory_limit: int = 1024 * 2,
-    overall_time_limit: int = 20,
+    run_time_limit: int = 5,                     # 5s
+    run_memory_limit: int = 1024 * 1024 * 2,     # 2GB
+    judge_time_limit: int = 10,                  # 10s
+    judge_memory_limit: int = 1024 * 1024 * 2,   # 2GB
+    overall_time_limit: int = 20,                # 20s
     output_judging_function_code: Optional[str] = None,
     code_id: str = 'Unknown Code ID',
     early_exit: bool = False,
@@ -185,8 +185,8 @@ def run_and_judge_code(
     run_workspace = os.path.join(workspace, 'run')
     judge_workspace = os.path.join(workspace, 'judge')
     
-    run_code = code
-    judge_code = get_output_judging_code(output_judging_function_code)
+    run_code_str = code
+    judge_code_str = get_output_judging_code(output_judging_function_code)
     
     if language == 'cpp':
         run_executor = integrated_executor.make_cpp_executor(run_workspace)
@@ -208,11 +208,11 @@ def run_and_judge_code(
     )
     
     run_executor.sandbox.reset_workspace()
-    run_prepare_result = run_executor.prepare(run_workspace, run_code)
+    run_prepare_result = run_executor.prepare(run_workspace, run_code_str)
     judge_executor.sandbox.reset_workspace()
-    if judge_code is not None:
+    if judge_code_str is not None:
         logger.debug(f'[{code_id}] Using custom output judging function.')
-        judge_prepare_result = judge_executor.prepare(judge_workspace, judge_code)
+        judge_prepare_result = judge_executor.prepare(judge_workspace, judge_code_str)
     else:
         judge_prepare_result = None
     
@@ -227,24 +227,31 @@ def run_and_judge_code(
             compile_time=run_compile_time,
             error_info=f"Compilation failed. Return code: {run_compile_return_code}. Stderr: {run_compile_stderr}",
         ) for _ in inputs]
+        judge_results = [ExecutionResult(
+            status=ExecutionStatus.COMPILE_ERROR,
+            compile_time=run_compile_time,
+            error_info=f"Compilation failed. Return code: {run_compile_return_code}. Stderr: {run_compile_stderr}",
+        ) for _ in inputs]
         verdicts = [-1 for _ in inputs]
         logger.debug(f'[{code_id}] Pass rate: 0.0. Passed list: {verdicts}')
         shutil.rmtree(workspace, ignore_errors=True)
-        return code_id, run_results, verdicts
+        return code_id, run_results, judge_results, verdicts
     
     run_results = []
+    judge_results = []
     verdicts = []
     t0 = time.time()
     for tc_idx in range(len(inputs)):
         if time.time() - t0 > overall_time_limit:
             logger.debug(f'[{code_id}] Overall time limit exceeded. Skipping remaining test cases.')
             run_results += [ExecutionResult(status=ExecutionStatus.SKIPPED) for _ in range(len(inputs) - tc_idx)]
+            judge_results += [ExecutionResult(status=ExecutionStatus.SKIPPED) for _ in range(len(inputs) - tc_idx)]
             verdicts += [-1 for _ in range(len(inputs) - tc_idx)]
             break
         input_str = inputs[tc_idx]
         reference_output_str = outputs[tc_idx]
         run_result = run_executor.single_run(
-            code=run_code,
+            code=run_code_str,
             input_str=input_str,
             limits=run_resource_limits,
             prepare_result=run_prepare_result,
@@ -252,11 +259,16 @@ def run_and_judge_code(
         if run_result.status != ExecutionStatus.SUCCESS:
             logger.debug(f'[{code_id}] Run error. Status: {run_result.status}.')
             verdict = 0
+            judge_result = ExecutionResult(status=ExecutionStatus.ERROR, error_info=f'Run error. Status: {run_result.status}.')
         else:
             candidate_output_str = run_result.stdout
-            if judge_code is None:
+            if judge_code_str is None:
+                # use default output judging function
+                cur_time = time.time()
                 verdict = default_output_judging_function(input_str, candidate_output_str, reference_output_str)
                 verdict = 1 if verdict else 0
+                judging_time = time.time() - cur_time
+                judge_result = ExecutionResult(status=ExecutionStatus.SUCCESS, execution_time=float(judging_time))
             else:
                 judge_input = {
                     'input_str': input_str,
@@ -265,7 +277,7 @@ def run_and_judge_code(
                 }
                 judge_input_str = json.dumps(judge_input)
                 judge_result = judge_executor.single_run(
-                    code=judge_code,
+                    code=judge_code_str,
                     input_str=judge_input_str,
                     limits=judge_resource_limits,
                     prepare_result=judge_prepare_result,
@@ -275,28 +287,32 @@ def run_and_judge_code(
                 except Exception as e:
                     logger.debug(f'[{code_id}] Failed to parse output judging result: {str(e)}')
                     verdict = None
+                    judge_result = ExecutionResult(status=ExecutionStatus.ERROR, error_info=f'Failed to parse output judging result: {str(e)}')
                 verdict = 1 if verdict else 0
             # if verdict == 1:
             #     logger.debug(f'[{code_id}] Test case #{tc_idx} passed.')
             # else:
             #     logger.debug(f'[{code_id}] Test case #{tc_idx} failed.')
         run_results.append(run_result)
+        judge_results.append(judge_result)
         verdicts.append(verdict)
     
         if early_exit and verdict != 1:
             logger.debug(f'[{code_id}] Early exit. Verdict: {verdict}. Skipping remaining test cases.')
             run_results += [ExecutionResult(status=ExecutionStatus.SKIPPED) for _ in range(len(inputs) - tc_idx - 1)]
+            judge_results += [ExecutionResult(status=ExecutionStatus.SKIPPED) for _ in range(len(inputs) - tc_idx - 1)]
             verdicts += [-1 for _ in range(len(inputs) - tc_idx - 1)]
             break
         
     assert len(run_results) == len(inputs)
+    assert len(judge_results) == len(inputs)
     assert len(verdicts) == len(inputs)
     
     pass_rate = get_pass_rate(verdicts)
     logger.debug(f'[{code_id}] Pass rate: {pass_rate:.2%}. Passed list: {verdicts}')
     
     shutil.rmtree(workspace, ignore_errors=True)
-    return code_id, run_results, verdicts
+    return code_id, run_results, judge_results, verdicts
 
 def judge_outputs(
     inputs: List[str],
@@ -304,15 +320,15 @@ def judge_outputs(
     reference_outputs: List[Optional[str]],
     integrated_executor: IntegratedExecutor,
     workspace: str,
-    overall_time_limit: int = 20,
-    time_limit_per_output: int = 5,
-    memory_limit: int = 1024 * 1024 * 2,
+    overall_time_limit: int = 20,                # 20s
+    time_limit_per_output: int = 5,              # 5s
+    memory_limit: int = 1024 * 1024 * 2,         # 2GB
     code_id: str = 'Unknown Code ID',
     output_judging_function_code: Optional[str] = None,
 ) -> List[int]:
     os.makedirs(workspace, exist_ok=True)
     judge_workspace = os.path.join(workspace, 'judge')
-    judge_code = get_output_judging_code(output_judging_function_code)
+    judge_code_str = get_output_judging_code(output_judging_function_code)
     judge_executor = integrated_executor.make_python_executor(judge_workspace)
     judge_resource_limits = integrated_executor.make_resource_limits(
         overall_time_limit=None,
@@ -320,9 +336,9 @@ def judge_outputs(
         memory_limit=memory_limit,
     )
     judge_executor.sandbox.reset_workspace()
-    if judge_code is not None:
+    if judge_code_str is not None:
         logger.debug(f'[{code_id}] Using custom output judging function.')
-        judge_prepare_result = judge_executor.prepare(judge_workspace, judge_code)
+        judge_prepare_result = judge_executor.prepare(judge_workspace, judge_code_str)
     else:
         judge_prepare_result = None
     
@@ -340,7 +356,7 @@ def judge_outputs(
         if candidate_output_str is None and reference_output_str is None:
             verdict = 1
         else:
-            if judge_code is None:
+            if judge_code_str is None:
                 verdict = default_output_judging_function(input_str, candidate_output_str, reference_output_str)
                 verdict = 1 if verdict else 0
             else:
@@ -351,7 +367,7 @@ def judge_outputs(
                 }
                 judge_input_str = json.dumps(judge_input)
                 judge_result = judge_executor.single_run(
-                    code=judge_code,
+                    code=judge_code_str,
                     input_str=judge_input_str,
                     limits=judge_resource_limits,
                     prepare_result=judge_prepare_result,
@@ -374,11 +390,11 @@ def run_and_judge_code_safe(
     outputs: List[str],
     integrated_executor: IntegratedExecutor,
     workspace: str,
-    run_time_limit: int = 5,
-    run_memory_limit: int = 1024 * 2,
-    judge_time_limit: int = 10,
-    judge_memory_limit: int = 1024 * 2,
-    overall_time_limit: int = 20,
+    run_time_limit: int = 5,                     # 5s
+    run_memory_limit: int = 1024 * 1024 * 2,     # 2GB
+    judge_time_limit: int = 10,                  # 10s
+    judge_memory_limit: int = 1024 * 1024 * 2,   # 2GB
+    overall_time_limit: int = 20,                # 20s
     output_judging_function_code: Optional[str] = None,
     code_id: str = 'Unknown Code ID',
     early_exit: bool = False,
@@ -403,10 +419,17 @@ def run_and_judge_code_safe(
     except Exception as e:
         logger.debug(f'[{code_id}] Exception occurred: {str(e)}')
         run_results = [ExecutionResult(status=ExecutionStatus.ERROR) for _ in range(len(inputs))]
+        judge_results = [ExecutionResult(status=ExecutionStatus.ERROR) for _ in range(len(inputs))]
         verdicts = [-1 for _ in range(len(inputs))]
         logger.debug(f'[{code_id}] Pass rate: 0.0')
         shutil.rmtree(workspace, ignore_errors=True)
-        return code_id, run_results, verdicts
+        return code_id, run_results, judge_results, verdicts
+
+def get_executor_cmd(executor, prepare_result, limits) -> List[str]:
+    inner_cmd = prepare_result.get("inner_cmd", None)
+    assert inner_cmd is not None, "Inner command must be provided in prepare_result"    
+    full_cmd = executor.sandbox.wrap_command(inner_cmd=inner_cmd, limits=limits)
+    return full_cmd
 
 def run_code(
     code: str,
@@ -414,9 +437,9 @@ def run_code(
     input_list: List[str],
     integrated_executor: IntegratedExecutor,
     workspace: str,
-    time_limit: int = 5,
-    overall_time_limit: int = 20,
-    memory_limit: int = 2 * 1024 * 1024,
+    time_limit: int = 5,                         # 5s
+    overall_time_limit: int = 20,                # 20s
+    memory_limit: int = 2 * 1024 * 1024,         # 2GB
     code_id: str = 'Unknown Code ID',
 ) -> List[ExecutionResult]:
     """
@@ -425,7 +448,7 @@ def run_code(
     run_workspace = os.path.join(workspace, 'run')
     os.makedirs(run_workspace, exist_ok=True)
 
-    run_code = code
+    run_code_str = code
     if language == 'cpp':
         run_executor = integrated_executor.make_cpp_executor(run_workspace)
     elif language in {'python3', 'python'}:
@@ -437,14 +460,17 @@ def run_code(
         time_limit=time_limit,
         memory_limit=memory_limit,
     )
+    run_prepare_result = run_executor.prepare(run_workspace, run_code_str)
+    full_cmd = get_executor_cmd(run_executor, run_prepare_result, run_resource_limits)
+    #logger.info(f'[{code_id}] Running code with command: {full_cmd}')
     run_results = run_executor.run(
-        code=run_code,
+        code=run_code_str,
         inputs=input_list,
         limits=run_resource_limits,
     )
     shutil.rmtree(workspace, ignore_errors=True)
     status_list = [result.status for result in run_results]
-    logger.debug(f'[{code_id}] Run results for code in {language}: {status_list}')
+    # logger.debug(f'[{code_id}] Run results for code in {language}: {status_list}')
 
     return run_results
 
@@ -454,9 +480,9 @@ def run_code_safe(
     input_list: List[str],
     integrated_executor: IntegratedExecutor,
     workspace: str,
-    time_limit: int = 5,
-    overall_time_limit: int = 20,
-    memory_limit: int = 2 * 1024 * 1024,
+    time_limit: int = 5,                         # 5s
+    overall_time_limit: int = 20,                # 20s
+    memory_limit: int = 2 * 1024 * 1024,         # 2GB
     code_id: str = 'Unknown Code ID',
 ) -> List[ExecutionResult]:
     """
@@ -490,13 +516,14 @@ def run_and_judge_codes_multiprocess(
     code_ids_list: Optional[List[List[str]]] = None,
     problem_id_list: Optional[List[str]] = None,
     output_judging_function_code_list: Optional[List[Optional[str]]] = None,
-    run_time_limit: int = 5,
-    run_memory_limit: int = 1024 * 2,
-    judge_time_limit: int = 10,
-    judge_memory_limit: int = 1024 * 2,
-    overall_time_limit: int = 20,
+    run_time_limit: int = 5,                     # 5s
+    run_memory_limit: int = 1024 * 1024 * 2,     # 2GB
+    judge_time_limit: int = 10,                  # 10s
+    judge_memory_limit: int = 1024 * 1024 * 2,   # 2GB
+    overall_time_limit: int = 20,                # 20s
     early_exit: bool = False,
     max_workers: int = 4,
+    ojf_type: str = 'hardtests', # not used
 ) -> List[Tuple[str, List[ExecutionResult], List[int]]]:
     if code_ids_list is None:
         code_ids_list = []
@@ -573,17 +600,38 @@ def run_and_judge_codes_multiprocess(
             'codes': codes,
             'code_ids': code_ids,
             'num_test_cases': len(test_cases),
-            'test_cases_passed_list_list': [],
-            'test_cases_pass_rate_list': [],
+            'test_cases_passed_list_list': [], # List[List[int]]
+            'test_cases_pass_rate_list': [], # List[float]
+            'test_cases_run_time_list': [], # List[List[Optional[float]]]
+            'test_cases_judge_time_list': [], # List[List[Optional[float]]]
+            'output_str_list': [], # List[List[Optional[str]]]
         }
         for code_idx in range(len(codes)):
             code_id = code_ids[code_idx]
             result = code_id_to_result[code_id]
-            code_id, run_results, verdicts = result
+            code_id, run_results, judge_results, verdicts = result
+            assert len(run_results) == len(judge_results), f"{len(run_results)} != {len(judge_results)}"
+            assert len(judge_results) == len(verdicts), f"{len(judge_results)} != {len(verdicts)}"
+            assert len(verdicts) == len(test_cases), f"{len(verdicts)} != {len(test_cases)}"
+
+            output_str_list = []
+            for run_result in run_results:
+                if run_result.status != ExecutionStatus.SUCCESS:
+                    output_str = None
+                else:
+                    output_str = run_result.output
+                    if not isinstance(output_str, str) or len(output_str) > 50000:
+                        output_str = None
+                output_str_list.append(output_str)
+            stats['output_str_list'].append(output_str_list)
+
             stats['test_cases_passed_list_list'].append(verdicts)
             if len(verdicts) != len(test_cases):
                 logger.debug(f'[{code_id}] Test case length mismatch. Expected: {len(test_cases)}, Got: {len(verdicts)}')
             pass_rate = get_pass_rate(verdicts)
             stats['test_cases_pass_rate_list'].append(pass_rate)
+            stats['test_cases_run_time_list'].append([run_result.execution_time for run_result in run_results])
+            stats['test_cases_judge_time_list'].append([judge_result.execution_time for judge_result in judge_results])
+
         stats_list.append(stats)
     return stats_list

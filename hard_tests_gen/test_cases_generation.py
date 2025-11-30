@@ -22,6 +22,7 @@ import subprocess
 from functools import partial
 import textwrap
 import copy
+from pathlib import Path
 
 from tqdm import tqdm
 import datasets
@@ -34,28 +35,29 @@ from dynaconf import Dynaconf
 from func_timeout import func_timeout, FunctionTimedOut
 import transformers
 import pandas as pd
+from codebubble.utils import ExecutionStatus
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from hard_tests_gen import utils
 from hard_tests_gen.utils import flatten_data_dict, unflatten_data_dict, remove_none_from_test_cases, get_object_size_mb
 from hard_tests_gen.llm_api import get_completion_for_prompts
-from hard_tests_gen.local_judge import IntegratedExecutor, run_code_safe, judge_outputs    
+from hard_tests_gen.local_judge import IntegratedExecutor, run_code_safe, judge_outputs
 
 @dataclass
 class InputGenerationArgs:
-    num_ri: int = 20
-    num_ri_attempts: int = 40
-    num_ri_mcop_per_func: int = 10
-    num_ri_mcop_per_func_attempts: int = 20
+    num_RPGen_SPGen_input: int = 20
+    num_RPGen_SPGen_input_attempts: int = 40
+    num_RPGen_SPGen_input_mcop_per_func: int = 10
+    num_RPGen_SPGen_input_mcop_per_func_attempts: int = 20
     
-    num_hi_per_func: int = 10
-    num_hi_per_func_attempts: int = 20
+    num_HackGen_input_per_func: int = 10
+    num_HackGen_input_per_func_attempts: int = 20
     
     input_gen_time_limit_per_attempt: int = 5 # in seconds
     input_gen_time_limit_per_func: int = 40 # in seconds
-    input_gen_ssi_validation_time_limit: int = 10 # in seconds
+    input_gen_LLMGen_input_validation_time_limit: int = 10 # in seconds
     input_gen_overall_time_limit: int = 60 * 3 # in seconds
-    input_gen_memory_limit: int = 1024 * 15 # in MB
+    input_gen_memory_limit: int = 1024 * 15 * 1024 # in KB
     input_gen_apply_validator: bool = True
     
 @dataclass
@@ -63,11 +65,11 @@ class OutputGenerationArgs:
     output_gen_overall_time_limit: int = 60 * 4 # in seconds
     
     output_gen_time_limit_per_solution_exec: int = 50 # in seconds
-    output_gen_solution_exec_memory_limit: int = 1024 * 15 # in MB
+    output_gen_solution_exec_memory_limit: int = 1024 * 15 * 1024 # in KB
     output_gen_time_limit_per_input_exec: int = 5 # in seconds
     
     output_gen_time_limit_per_solution_judge: int = 15 # in seconds
-    output_gen_solution_judge_memory_limit: int = 1024 * 15 # in MB
+    output_gen_solution_judge_memory_limit: int = 1024 * 15 * 1024 # in KB
     output_gen_time_limit_per_output_judge: int = 5 # in seconds
     
     max_code_solutions_to_try: int = 5
@@ -75,7 +77,7 @@ class OutputGenerationArgs:
     output_inconsistent_tolerance: float = 0.0 # when 0 < output_inconsistent_tolerance < 1: means rate, the bigger, the easier to be kept
     min_num_agreements: int = 2 # the minimum number of agreements of outputs to consider it valid.
 
-    test_cases_max_size_per_problem: int = 500 # in MB
+    test_cases_max_size_per_problem: int = 500 * 1024 # in KB
 
 @dataclass
 class OtherArgs:
@@ -89,8 +91,8 @@ class OtherArgs:
     code_exec_temp_dir: str
     cpp_compiler_flags: str = '--std=c++20'
     python_args: str = ''
-    code_exec_max_input_size: int = 100
-    code_exec_max_output_size: int = 100
+    code_exec_max_input_size: int = 100 * 1024 # in KB
+    code_exec_max_output_size: int = 100 * 1024 # in KB
     pid_subset_path: str = None
     max_workers: int = 3
     save_steps: int = 10
@@ -100,12 +102,14 @@ class OtherArgs:
     multithread: bool = False
     multiprocess: bool = False
     do_shuffle: bool = False
+    task_name: str = 'untitled'
     
 
 def generate_inputs(
     gen_input_func_code: str,
     gen_input_func_name: str,
     integrated_executor: IntegratedExecutor,
+    workspace: str,
     input_validator_func_code: str = None,
     apply_validator: bool = False,
     num_attempts: int = 10,
@@ -162,29 +166,35 @@ else:
                 language='python3',
                 input_list=[''],
                 integrated_executor=integrated_executor,
-                time_limit_per_input=time_limit_per_attempt,
+                workspace=workspace,
+                time_limit=time_limit_per_attempt,
                 overall_time_limit=time_limit_per_attempt,
                 memory_limit=memory_limit,
+                code_id=f'{pid}_generate_inputs_{i}',
             )
             if len(exec_results) != 1:
                 logger.error(f'[{pid}] Unexpected number of results: {len(exec_results)}.')
+                # logger.info('TEMP_STATS: Failed 1')
                 continue
             exec_result = exec_results[0]
-            if exec_result['status'] != 'success':
+            if exec_result.status != ExecutionStatus.SUCCESS:
                 try:
-                    stderr_str = str(exec_result['stderr'])
+                    stderr_str = str(exec_result.stderr)
                 except:
                     stderr_str = ''
-                logger.debug(f'[{pid}] Input generation failed: exec_result["status"]="{exec_result["status"]}". exec_result["stderr_str"]="{stderr_str[:1000]}"')
+                logger.debug(f'[{pid}] Input generation failed: exec_result.status="{exec_result.status}". exec_result.stderr_str="{stderr_str[:1000]}"')
+                # logger.info('TEMP_STATS: Failed 2')
                 continue
             try:
-                stdout_str = str(exec_result["stdout"])
+                stdout_str = str(exec_result.stdout)
             except:
                 stdout_str = ""
             if not stdout_str.startswith('Result: '):
-                logger.debug(f'[{pid}] Input generation failed: exec_result["stdout"]="{stdout_str[:1000]}".')
+                logger.debug(f'[{pid}] Input generation failed: exec_result.stdout="{stdout_str[:1000]}".')
+                # logger.info('TEMP_STATS: Failed 3')
                 continue
             input_str = stdout_str[len('Result: '):]
+            # logger.info('TEMP_STATS: Success')
             input_list.append(input_str)
             if len(input_list) >= num_input:
                 break
@@ -198,7 +208,7 @@ else:
     
 def validate_inputs_and_filter(
     inputs: List[str],
-    input_validator_func_code: str,
+    input_validator_func_code: Optional[str],
     workspace: str,
     integrated_executor: IntegratedExecutor,
     overall_time_limit: int = 10,
@@ -244,21 +254,31 @@ print('Result: ' + json.dumps(filtered_input_list), end='')
         )
         if len(exec_results) != 1:
             logger.error(f'[{pid}] Unexpected number of results: {len(exec_results)}.')
+            num_invalid = len(inputs)
+            logger.info("iubviacyanadav_1 " * num_invalid)
             return []
         exec_result = exec_results[0]
-        if exec_result['status'] != 'success':
-            logger.debug(f'[{pid}] Input validation failed: {exec_result["status"]}.')
+        if exec_result.status != ExecutionStatus.SUCCESS:
+            logger.debug(f'[{pid}] Input validation failed: {exec_result.status}.')
+            num_invalid = len(inputs)
+            logger.info("iubviacyanadav_2 " * num_invalid)
             return []
-        stdout_str = exec_result['stdout']
+        stdout_str = exec_result.stdout
         if not stdout_str.startswith('Result: '):
             logger.debug(f'[{pid}] Input validation failed: {str(stdout_str)[:1000]}.')
+            num_invalid = len(inputs)
+            logger.info("iubviacyanadav_3 " * num_invalid)
             return []
         filtered_inputs = json.loads(stdout_str[len('Result: '):])
+        num_invalid = len(inputs) - len(filtered_inputs)
+        logger.info("iubviacyanadav_4 " * num_invalid)
         if deduplicate:
             filtered_inputs = list(set(filtered_inputs))
         return filtered_inputs
     except Exception as e:
         logger.debug(f'[{pid}] Input validation failed: {str(e)}.')
+        num_invalid = len(inputs)
+        logger.info("iubviacyanadav_5 " * num_invalid)
         return []
     
 def generate_all_inputs(
@@ -274,40 +294,41 @@ def generate_all_inputs(
     overall_time_limit = input_gen_args['input_gen_overall_time_limit']
     time_limit_per_attempt = input_gen_args['input_gen_time_limit_per_attempt']
     time_limit_per_func = input_gen_args['input_gen_time_limit_per_func']
-    ssi_validation_time_limit = input_gen_args['input_gen_ssi_validation_time_limit']
+    LLMGen_input_validation_time_limit = input_gen_args['input_gen_LLMGen_input_validation_time_limit']
     memory_limit = input_gen_args['input_gen_memory_limit']
     
     start_overall = time.time()
     
-    # Small-Scale Input
-    ssi_list = test_cases_kit['input_generation']['small_scale_input']
-    ssi_list = validate_inputs_and_filter(
-        inputs=ssi_list,
+    # LLMGen Input
+    LLMGen_input_list = test_cases_kit['input_generation']['LLMGen_input']
+    LLMGen_input_list = validate_inputs_and_filter(
+        inputs=LLMGen_input_list,
         input_validator_func_code=iv_func_str,
         workspace=workspace,
         integrated_executor=integrated_executor,
-        overall_time_limit=ssi_validation_time_limit,
+        overall_time_limit=LLMGen_input_validation_time_limit,
         memory_limit=memory_limit,
         pid=pid,
         deduplicate=True,
     )
     
-    # Regular Input
-    regular_input_generator = test_cases_kit['input_generation']['regular_input_generator']
-    is_mcop = len(regular_input_generator['func_names']) >= 2
-    code = regular_input_generator['code']
-    num_input = input_gen_args['num_ri_mcop_per_func'] if is_mcop else input_gen_args['num_ri']
-    num_attempts = input_gen_args['num_ri_mcop_per_func_attempts'] if is_mcop else input_gen_args['num_ri_attempts']
-    ri_list_list = []
-    for func_name in regular_input_generator['func_names']:
+    # RPGen and SPGen Input
+    RPGen_SPGen_input_generator = test_cases_kit['input_generation']['RPGen_SPGen_input_generator']
+    is_mcop = len(RPGen_SPGen_input_generator['func_names']) >= 2
+    code = RPGen_SPGen_input_generator['code']
+    num_input = input_gen_args['num_RPGen_SPGen_input_mcop_per_func'] if is_mcop else input_gen_args['num_RPGen_SPGen_input']
+    num_attempts = input_gen_args['num_RPGen_SPGen_input_mcop_per_func_attempts'] if is_mcop else input_gen_args['num_RPGen_SPGen_input_attempts']
+    RPGen_SPGen_input_list_list = []
+    for func_name in RPGen_SPGen_input_generator['func_names']:
         if time.time() - start_overall > overall_time_limit:
-            logger.debug(f'[{pid}] Overall time limit exceeded when generating regular inputs')
-            ri_list_list.extend([[] for _ in range(len(regular_input_generator['func_names']))])
+            logger.debug(f'[{pid}] Overall time limit exceeded when generating RPGen_SPGen inputs')
+            RPGen_SPGen_input_list_list.extend([[] for _ in range(len(RPGen_SPGen_input_generator['func_names']))])
             break
-        ri_list = generate_inputs(
+        RPGen_SPGen_input_list = generate_inputs(
             gen_input_func_code=code,
             gen_input_func_name=func_name,
             integrated_executor=integrated_executor,
+            workspace=workspace,
             input_validator_func_code=iv_func_str,
             apply_validator=apply_validator,
             num_input=num_input,
@@ -318,24 +339,25 @@ def generate_all_inputs(
             deduplicate=True,
             pid=pid,
         )
-        ri_list_list.append(ri_list)
-    assert len(ri_list_list) == len(regular_input_generator['func_names']), f"len(ri_list_list)={len(ri_list_list)}, len(regular_input_generator['func_names'])={len(regular_input_generator['func_names'])}."
+        RPGen_SPGen_input_list_list.append(RPGen_SPGen_input_list)
+    assert len(RPGen_SPGen_input_list_list) == len(RPGen_SPGen_input_generator['func_names']), f"len(RPGen_SPGen_input_list_list)={len(RPGen_SPGen_input_list_list)}, len(RPGen_SPGen_input_generator['func_names'])={len(RPGen_SPGen_input_generator['func_names'])}."
     
-    # Hacking Input
-    hacking_input_generator = test_cases_kit['input_generation']['hacking_input_generator']
-    code = hacking_input_generator['code']
-    num_input = input_gen_args['num_hi_per_func']
-    num_attempts = input_gen_args['num_hi_per_func_attempts']
-    hi_list_list = []
-    for func_name in hacking_input_generator['func_names']:
+    # HackGen Input
+    HackGen_input_generator = test_cases_kit['input_generation']['HackGen_input_generator']
+    code = HackGen_input_generator['code']
+    num_input = input_gen_args['num_HackGen_input_per_func']
+    num_attempts = input_gen_args['num_HackGen_input_per_func_attempts']
+    HackGen_input_list_list = []
+    for func_name in HackGen_input_generator['func_names']:
         if time.time() - start_overall > overall_time_limit:
-            logger.debug(f'[{pid}] Overall time limit exceeded when generating hacking inputs')
-            hi_list_list.extend([[] for _ in range(len(hacking_input_generator['func_names']))])
+            logger.debug(f'[{pid}] Overall time limit exceeded when generating HackGen inputs')
+            HackGen_input_list_list.extend([[] for _ in range(len(HackGen_input_generator['func_names']))])
             break
-        hi_list = generate_inputs(
+        HackGen_input_list = generate_inputs(
             gen_input_func_code=code,
             gen_input_func_name=func_name,
             integrated_executor=integrated_executor,
+            workspace=workspace,
             input_validator_func_code=iv_func_str,
             apply_validator=apply_validator,
             num_input=num_input,
@@ -346,13 +368,13 @@ def generate_all_inputs(
             deduplicate=True,
             pid=pid,
         )
-        hi_list_list.append(hi_list)
-    assert len(hi_list_list) == len(hacking_input_generator['func_names']), f"len(hi_list_list)={len(hi_list_list)}, len(hacking_input_generator['func_names'])={len(hacking_input_generator['func_names'])}."
+        HackGen_input_list_list.append(HackGen_input_list)
+    assert len(HackGen_input_list_list) == len(HackGen_input_generator['func_names']), f"len(HackGen_input_list_list)={len(HackGen_input_list_list)}, len(HackGen_input_generator['func_names'])={len(HackGen_input_generator['func_names'])}."
 
     input_dict = {
-        'small_scale': ssi_list,
-        'regular': ri_list_list,
-        'hacking': hi_list_list,
+        'LLMGen': LLMGen_input_list,
+        'RPGen_SPGen': RPGen_SPGen_input_list_list,
+        'HackGen': HackGen_input_list_list,
     }
     mapping, input_list = flatten_data_dict(input_dict)
     return mapping, input_list
@@ -365,7 +387,7 @@ def generate_outputs(
     integrated_executor: IntegratedExecutor,
     overall_time_limit: int = 100,
     time_limit_per_input: int = 5,
-    memory_limit: int = 4096,
+    memory_limit: int = 4096 * 1024,
     sid: str = 'unknown SID',
 ) -> Optional[List[str]]:
     if len(inputs) == 0:
@@ -391,23 +413,23 @@ def generate_outputs(
         logger.error(f"[{sid}] Unexpected number of results: {len(exec_results)}. Expected: {len(inputs)}.")
         return None
 
-    if exec_results[0]['status'] == 'compile_error':
-        stderr_str = exec_results[0]['stderr']
+    if exec_results[0].status == ExecutionStatus.COMPILE_ERROR:
+        stderr_str = exec_results[0].stderr
         stderr_str = stderr_str[:1000] if isinstance(stderr_str, str) else ""
         logger.debug(f"[{sid}] Compilation error. stderr: {stderr_str}")
         return None
 
     generated_outputs = []
     for exec_res in exec_results:
-        if exec_res['status'] != 'success':
+        if exec_res.status != ExecutionStatus.SUCCESS:
             try:
-                stderr_str = str(exec_res['stderr'])
+                stderr_str = str(exec_res.stderr)
             except:
                 stderr_str = ""
-            logger.debug(f'[{sid}] Execution failed. exec_res["status"]="{exec_res["status"]}. exec_res["stderr"]="{stderr_str[:1000]}"')
+            logger.debug(f'[{sid}] Execution failed. exec_res.status="{exec_res.status}. exec_res.stderr="{stderr_str[:1000]}"')
             generated_outputs.append(None)
         else:
-            stdout_str = exec_res['stdout']
+            stdout_str = exec_res.stdout
             if not isinstance(stdout_str, str):
                 logger.debug(f"[{sid}] Execution failed. Output is not a string.")
                 generated_outputs.append(None)
@@ -503,7 +525,7 @@ def generate_outputs_and_verify(
                 logger.debug(f'[{pid}] Overall time limit exceeded when generating outputs.')
                 return {
                     'result': None,
-                    'status': output_generation_time_limit_exceeded,
+                    'status': 'output_generation_time_limit_exceeded',
                 }
             judging_results = judge_outputs(
                 inputs=input_list,
@@ -570,23 +592,23 @@ def generate_outputs_and_verify(
 
 
 def get_test_cases_kit_info_msg(test_cases_kit) -> str:
-    num_ri_func_names = len(test_cases_kit['input_generation']['regular_input_generator']['func_names'])
-    num_hi_func_names = len(test_cases_kit['input_generation']['hacking_input_generator']['func_names'])
-    num_ssi = len(test_cases_kit['input_generation']['small_scale_input'])
+    num_RPGen_SPGen_input_func_names = len(test_cases_kit['input_generation']['RPGen_SPGen_input_generator']['func_names'])
+    num_HackGen_input_func_names = len(test_cases_kit['input_generation']['HackGen_input_generator']['func_names'])
+    num_LLMGen_input = len(test_cases_kit['input_generation']['LLMGen_input'])
     info = [
-        f"SSI ({num_ssi})",
-        f"RI ({num_ri_func_names} func)",
-        f"HI ({num_hi_func_names} func)",
-        f"IV {'(√)' if test_cases_kit['input_validator'] is not None else '(x)'}",
-        f"OJF {'(√)' if test_cases_kit['output_judging_function'] is not None else '(x)'}",
+        f"LLMGen input ({num_LLMGen_input})",
+        f"RPGen/SPGen input ({num_RPGen_SPGen_input_func_names} func)",
+        f"HackGen input ({num_HackGen_input_func_names} func)",
+        f"Input Validator {'(√)' if test_cases_kit['input_validator'] is not None else '(x)'}",
+        f"Output Judging Function {'(√)' if test_cases_kit['output_judging_function'] is not None else '(x)'}",
     ]
     return ', '.join(info)
 
 def get_test_cases_info_msg(mapping, tc_list):
     info = [
-        f"SS ({len(mapping['small_scale'])})",
-        f"R ({[len(d) for d in mapping['regular']]})",
-        f"H ({[len(d) for d in mapping['hacking']]})",
+        f"LLMGen ({len(mapping['LLMGen'])})",
+        f"RPGen/SPGen ({[len(d) for d in mapping['RPGen_SPGen']]})",
+        f"HackGen ({[len(d) for d in mapping['HackGen']]})",
         f"Total ({len(tc_list)})",
     ]
     return ', '.join(info)
@@ -650,9 +672,9 @@ def generate_test_cases(
     assert len(test_case_list) == len(output_list)
     mapping, test_case_list = remove_none_from_test_cases(mapping, test_case_list)
     logger.debug(f"[{pid}] Test cases generated and filtered. {get_test_cases_info_msg(mapping, test_case_list)}")
-    test_cases_size = get_object_size_mb(test_case_list)
+    test_cases_size = get_object_size_mb(test_case_list) * 1024 # KB
     if test_cases_size > output_gen_args['test_cases_max_size_per_problem']:
-        logger.debug(f"[{pid}] Test cases size exceeds the limit. Size: {test_cases_size} MB. Limit: {output_gen_args['test_cases_max_size_per_problem']} MB.")
+        logger.debug(f"[{pid}] Test cases size exceeds the limit. Size: {test_cases_size} MB. Limit: {output_gen_args['test_cases_max_size_per_problem']} KB.")
         result_dict = {
             'status': 'test_cases_size_exceeded_limit',
             'mapping': None,
@@ -703,6 +725,19 @@ def generate_test_cases_from_pdata(
     )
     code_solution_id_list = [d['code_solution_id'] for d in code_solutions]
     logger.debug(f'[{pid}] Got {len(code_solutions)} code solutions. They are: {code_solution_id_list}.')
+
+
+    python_args = str(other_args.python_args)
+    if python_args == '':
+        python_args = []
+    else:
+        python_args = python_args.split(' ')
+
+    cpp_compiler_flags = str(other_args.cpp_compiler_flags)
+    if cpp_compiler_flags == '':
+        cpp_compiler_flags = []
+    else:
+        cpp_compiler_flags = cpp_compiler_flags.split(' ')
         
     # Make integrated executor
     integrated_executor = IntegratedExecutor(
@@ -713,9 +748,9 @@ def generate_test_cases_from_pdata(
         max_output_size=other_args.code_exec_max_output_size,
         bwrap_path=other_args.bwrap_path,
         cpp_compiler_path=other_args.cpp_compiler_path,
-        cpp_compiler_flags=other_args.cpp_compiler_flags.split(' '),
+        cpp_compiler_flags=cpp_compiler_flags,
         python_interpreter_path=other_args.python_interpreter_path,
-        python_args=other_args.python_args.split(' '),
+        python_args=python_args,
     )
     
     random_str = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=8))
@@ -736,6 +771,38 @@ def generate_test_cases_from_pdata(
     )
     return result_dict
 
+
+def _generate_test_cases_worker(args_tuple):
+    """
+    Wrapper for multiprocessing; keeps child process work minimal and pickle-friendly.
+    """
+    pdata, tc_kit, input_gen_args, output_gen_args, other_args = args_tuple
+    pid = pdata.get('pid', 'unknown_pid')
+    kwargs = {
+        'problem_data': pdata,
+        'test_cases_kit': tc_kit,
+        'input_gen_args': input_gen_args,
+        'output_gen_args': output_gen_args,
+        'other_args': other_args,
+    }
+    try:
+        result_dict = generate_test_cases_from_pdata(**kwargs)
+        status = result_dict['status']
+        mapping = result_dict['mapping']
+        encoded_test_cases = result_dict['encoded_test_cases']
+    except Exception as e:
+        logger.error(f'[{pid}] Failed to generate test cases due to unexpected error: {e}')
+        status = 'unknown_error'
+        mapping = None
+        encoded_test_cases = None
+    return {
+        'pid': pid,
+        'test_cases_kit': tc_kit,
+        'status': status,
+        'mapping': mapping,
+        'encoded_test_cases': encoded_test_cases,
+    }
+
     
 def parse_args():
     parser = transformers.HfArgumentParser((InputGenerationArgs, OutputGenerationArgs, OtherArgs))
@@ -745,9 +812,8 @@ def parse_args():
 def main():
     input_gen_args, output_gen_args, other_args = parse_args()
     assert not other_args.multithread, 'Multithreading is not supported yet.'
-    assert not other_args.multiprocess, 'Multiprocessing is not supported yet.'
     
-    log_folder = f'tc_gen_{other_args.start}_{other_args.end}_{time.strftime("%Y%m%d-%H%M%S")}'
+    log_folder = f'tc_gen_{other_args.task_name}_{other_args.start}_{other_args.end}_{time.strftime("%Y%m%d-%H%M%S")}'
     os.makedirs(log_folder, exist_ok=True)
 
     output_file_name = f'{log_folder}/stdout.log'
@@ -782,9 +848,15 @@ def main():
     pid_to_tc_kit: Dict[str, str] = {d['pid']: d for d in test_cases_kit_list}
     logger.info(f'Loaded {len(pid_to_tc_kit)} test cases kit')
     
-    try:
-        problem_data_list = utils.load_json_line(other_args.problem_data_path)
-    except:
+    if os.path.exists(other_args.problem_data_path):
+        problem_data_path = Path(other_args.problem_data_path)
+        if problem_data_path.suffix == '.jsonl':
+            problem_data_list = utils.load_json_line(other_args.problem_data_path)
+        elif problem_data_path.suffix == '.json':
+            problem_data_list = utils.load_json(other_args.problem_data_path)
+        else:
+            raise ValueError(f'Unsupported problem_data_path file format: {other_args.problem_data_path}')
+    else:
         problem_data_list = datasets.load_dataset(other_args.problem_data_path)['train'].to_list()
     pid_to_pdata = {d['pid']: d for d in problem_data_list}
     logger.info(f'Loaded {len(pid_to_pdata)} problem data')
@@ -830,31 +902,12 @@ def main():
     test_cases_results = []
     test_cases_related_contents_results = []
     
-    
-    for arg_idx, arg in tqdm(enumerate(f_args), total=len(f_args)):
-        pid, tc_kit = arg[0]['pid'], arg[1]
-        kwargs = {
-            'problem_data': arg[0],
-            'test_cases_kit': arg[1],
-            'input_gen_args': arg[2],
-            'output_gen_args': arg[3],
-            'other_args': arg[4],
-        }
-        try:
-            result_dict = generate_test_cases_from_pdata(**kwargs)
-            status = result_dict['status']
-            mapping = result_dict['mapping']
-            encoded_test_cases = result_dict['encoded_test_cases']
-        except Exception as e:
-            status = 'unknown_error'
-            mapping = None
-            encoded_test_cases = None
-            logger.error(f'[{pid}] Failed to generate test cases due to unexpected error: {e}')
-            
+    def handle_result(pid: str, tc_kit: str, status: str, mapping: Any, encoded_test_cases: Any, total_tasks: int):
+        nonlocal total_finished, test_cases_results, test_cases_related_contents_results
         total_finished += 1
         if total_finished % other_args.log_steps == 0:
-            logger.debug(f"Current progress: {total_finished}/{len(f_args)}")
-            
+            logger.debug(f"Current progress: {total_finished}/{total_tasks}")
+
         tc_related_contents_res_dict = {
             'pid': pid,
             'test_cases_kit': tc_kit,
@@ -862,7 +915,7 @@ def main():
             'status': status,
         }
         test_cases_related_contents_results.append(tc_related_contents_res_dict)
-        
+
         tc_res_dict = {
             'pid': pid,
             'test_cases_kit': tc_kit,
@@ -871,18 +924,65 @@ def main():
             'test_cases': encoded_test_cases,
         }
         test_cases_results.append(tc_res_dict)
-        
+
         logger.debug(f'Finished generating test cases for {pid}. Total finished: {total_finished}. len(test_cases_results): {len(test_cases_results)}. len(test_cases_related_contents_results): {len(test_cases_related_contents_results)}')
 
-        utils.force_delete_folder(code_exec_temp_dir)
-        os.makedirs(code_exec_temp_dir, exist_ok=True)
-
-        if len(test_cases_results) >= save_steps or arg_idx == len(f_args) - 1:
+        if len(test_cases_results) >= save_steps or total_finished == total_tasks:
             logger.debug(f'Saving {len(test_cases_results)} sets of test cases to {test_cases_save_path}, and related contents to {test_cases_related_contents_save_path}')
             utils.save_json_line(test_cases_results, test_cases_save_path, do_append=True)
             utils.save_json_line(test_cases_related_contents_results, test_cases_related_contents_save_path, do_append=True)
             test_cases_results = []
             test_cases_related_contents_results = []
+
+    if other_args.multiprocess:
+        logger.info(f'Using multiprocessing with max_workers={max_workers}')
+        utils.force_delete_folder(code_exec_temp_dir)
+        os.makedirs(code_exec_temp_dir, exist_ok=True)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_generate_test_cases_worker, arg) for arg in f_args]
+            for future in tqdm(concurrent.futures.as_completed(futures), total=len(f_args)):
+                try:
+                    res = future.result()
+                    pid = res['pid']
+                    tc_kit = res['test_cases_kit']
+                    status = res['status']
+                    mapping = res['mapping']
+                    encoded_test_cases = res['encoded_test_cases']
+                except Exception as e:
+                    pid = 'unknown_pid'
+                    tc_kit = None
+                    status = 'unknown_error'
+                    mapping = None
+                    encoded_test_cases = None
+                    logger.error(f'Failed to generate test cases in multiprocessing worker due to unexpected error: {e}')
+                handle_result(pid, tc_kit, status, mapping, encoded_test_cases, len(f_args))
+        utils.force_delete_folder(code_exec_temp_dir)
+        os.makedirs(code_exec_temp_dir, exist_ok=True)
+    else:
+        for arg_idx, arg in tqdm(enumerate(f_args), total=len(f_args)):
+            pid, tc_kit = arg[0]['pid'], arg[1]
+            kwargs = {
+                'problem_data': arg[0],
+                'test_cases_kit': arg[1],
+                'input_gen_args': arg[2],
+                'output_gen_args': arg[3],
+                'other_args': arg[4],
+            }
+            try:
+                result_dict = generate_test_cases_from_pdata(**kwargs)
+                status = result_dict['status']
+                mapping = result_dict['mapping']
+                encoded_test_cases = result_dict['encoded_test_cases']
+            except Exception as e:
+                status = 'unknown_error'
+                mapping = None
+                encoded_test_cases = None
+                logger.error(f'[{pid}] Failed to generate test cases due to unexpected error: {e}')
+
+            handle_result(pid, tc_kit, status, mapping, encoded_test_cases, len(f_args))
+
+            utils.force_delete_folder(code_exec_temp_dir)
+            os.makedirs(code_exec_temp_dir, exist_ok=True)
 
     f_stdout.close()
     f_stderr.close()
@@ -890,4 +990,5 @@ def main():
     sys.stderr = sys.__stderr__
 
 if __name__ == '__main__':
+    print('Starting test cases generation...')
     main()

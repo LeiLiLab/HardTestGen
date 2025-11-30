@@ -14,6 +14,7 @@ import pathlib
 import toml
 import ast
 import argparse
+from pathlib import Path
 
 from tqdm import tqdm
 from loguru import logger
@@ -34,50 +35,101 @@ prompt_templates = utils.load_prompt_templates(os.path.join(os.path.dirname(__fi
 
 def get_iv_and_ojf_gen_prompt(
     question_content: str,
-    correct_program: str,
+    oracle_program: str,
     prompt_template: str = 'test_cases_kit_prompt_iv_and_ojf'
 ):
     template = Template(prompt_templates[prompt_template]['content'])
     prompt = template.render(
-        problem_statement=question_content,
-        correct_program=correct_program
+        problem_specification=question_content,
+        oracle_program=oracle_program
     )
     return prompt.strip()
 
 def get_ig_gen_prompt(
     question_content: str,
-    correct_program: str,
+    oracle_program: str,
     input_validator: str,
-    num_SSI: int = 10,
+    num_LLMGen_input: int = 10,
     prompt_template: str = 'test_cases_kit_prompt_ig',
 ):
     template = Template(prompt_templates[prompt_template]['content'])
     prompt = template.render(
-        num_SSI=str(num_SSI),
-        problem_statement=question_content,
-        correct_program=correct_program,
+        num_LLMGen_input=str(num_LLMGen_input),
+        problem_specification=question_content,
+        oracle_program=oracle_program,
         input_validator=input_validator
     )
     return prompt.strip()
 
+def _fix_control_chars_inside_strings(s: str) -> str:
+    out = []
+    in_str = False
+    escape = False
+
+    for ch in s:
+        if in_str:
+            if escape:
+                out.append(ch)
+                escape = False
+            else:
+                if ch == '\\':
+                    out.append(ch)
+                    escape = True
+                elif ch == '"':
+                    out.append(ch)
+                    in_str = False
+                else:
+                    c = ord(ch)
+                    if c < 0x20:
+                        if ch == '\n':
+                            out.append('\\n')
+                        elif ch == '\r':
+                            out.append('\\r')
+                        elif ch == '\t':
+                            out.append('\\t')
+                        else:
+                            out.append('\\u%04x' % c)
+                    else:
+                        out.append(ch)
+        else:
+            if ch == '"':
+                in_str = True
+                out.append(ch)
+            else:
+                out.append(ch)
+
+    return ''.join(out)
+
+
 def parse_test_cases_kit_response(response: str) -> Dict[str, Any]:
     try:
         match = re.search(r'(?<=# Result)[\s\S]*', response)
+        if not match:
+            raise ValueError("No '# Result' section found in response")
         result_content = match.group().strip()
+
         json_str = utils.extract_code(text=result_content, language='json', allow_no_language_label=False, verbose=False)
-        result_dict = json.loads(json_str)
-        return result_dict
+        if json_str is None:
+            raise ValueError("utils.extract_code returned None")
+
+        json_str = json_str.strip()
+        try:
+            return json.loads(json_str)
+        except:
+            json_fixed = _fix_control_chars_inside_strings(json_str)
+            return json.loads(json_fixed)
     except:
         return dict()
 
+
 def get_test_cases_kit_info_msg(test_cases_kit) -> str:
-    num_ri_func_names = len(test_cases_kit['input_generation']['regular_input_generator']['func_names'])
-    num_hi_func_names = len(test_cases_kit['input_generation']['hacking_input_generator']['func_names'])
-    num_ssi = len(test_cases_kit['input_generation']['small_scale_input'])
+    num_RPGen_SPGen_input_func_names = len(test_cases_kit['input_generation']['RPGen_SPGen_input_generator']['func_names'])
+    num_HackGen_input_func_names = len(test_cases_kit['input_generation']['HackGen_input_generator']['func_names'])
+    num_LLMGen_input = len(test_cases_kit['input_generation']['LLMGen_input'])
     info = [
-        f"SSI ({num_ssi})"
-        f"RI ({num_ri_func_names})"
-        f"HI ({num_hi_func_names})"
+        f"LLMGen_input ({num_LLMGen_input})"
+        f"RPGen_SPGen_input ({num_RPGen_SPGen_input_func_names})"
+        f"HackGen_input ({num_HackGen_input_func_names})"
         f"IV {'(√)' if test_cases_kit['input_validator'] is not None else '(x)'}",
         f"OJF {'(√)' if test_cases_kit['output_judging_function'] is not None else '(x)'}"
     ]
@@ -90,26 +142,26 @@ def extract_test_cases_kit(pid: str, iv_and_ojf_gen_response: str, ig_gen_respon
     output_judging_function = iv_and_ojf_gen_dict.get('output_judging_function', None)
     
     ig_gen_dict = parse_test_cases_kit_response(ig_gen_response)
-    ri_code = ig_gen_dict.get('regular_input_generator', None)
-    ri_func_names = get_function_names(ri_code)
-    ri_func_names = [name for name in ri_func_names if name.startswith('gen_regular_input')]
-    hi_code = ig_gen_dict.get('hacking_input_generator', None)
-    hi_func_names = get_function_names(hi_code)
-    hi_func_names = [name for name in hi_func_names if name.startswith('gen_hacking_input')]
-    ssi_list = ig_gen_dict.get('small_scale_input', [])
-    ssi_list = [str(d) for d in ssi_list]
+    RPGen_SPGen_input_code = ig_gen_dict.get('RPGen_SPGen_input_generator', None)
+    RPGen_SPGen_input_func_names = get_function_names(RPGen_SPGen_input_code)
+    RPGen_SPGen_input_func_names = [name for name in RPGen_SPGen_input_func_names if name.startswith('gen_stratified_input') or name.startswith('gen_range_based_input')]
+    HackGen_input_code = ig_gen_dict.get('HackGen_input_generator', None)
+    HackGen_input_func_names = get_function_names(HackGen_input_code)
+    HackGen_input_func_names = [name for name in HackGen_input_func_names if name.startswith('gen_hacking_input')]
+    LLMGen_input_list = ig_gen_dict.get('LLMGen_input', [])
+    LLMGen_input_list = [str(d) for d in LLMGen_input_list]
     
     test_cases_kit = {
         'pid': pid,
         'input_generation': {
-            'small_scale_input': ssi_list,
-            'regular_input_generator': {
-                'code': ri_code,
-                'func_names': ri_func_names,
+            'LLMGen_input': LLMGen_input_list,
+            'RPGen_SPGen_input_generator': {
+                'code': RPGen_SPGen_input_code,
+                'func_names': RPGen_SPGen_input_func_names,
             },
-            'hacking_input_generator': {
-                'code': hi_code,
-                'func_names': hi_func_names,
+            'HackGen_input_generator': {
+                'code': HackGen_input_code,
+                'func_names': HackGen_input_func_names,
             }
         },
         'input_validator': input_validator,
@@ -139,17 +191,17 @@ def get_function_names(code_str: str) -> List[str]:
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_name', type=str, help='Name of HuggingFace dataset.')
+    parser.add_argument('--dataset_name_or_path', type=str)
     parser.add_argument('--target_pids_path', type=str, default=None, help='Path to the JSON file containing target problem IDs. If not provided, all problems in the dataset will be used.')
     parser.add_argument('--iv_and_ojf_gen_prompt_template', type=str, default='test_cases_kit_prompt_iv_and_ojf', help='Prompt template for Input Validator (IV) and Output Judging Function (OJF) generation.')
     parser.add_argument('--ig_gen_prompt_template', type=str, default='test_cases_kit_prompt_ig', help='Prompt template for Input Generation (IG) generation')
-    parser.add_argument('--num_SSI', type=int, default=10, help='Number of small-scale inputs to generate.')
+    parser.add_argument('--num_LLMGen_input', type=int, default=10, help='Number of LLMGen inputs to generate.')
     parser.add_argument('--iv_and_ojf_gen_responses_save_path', type=str, default='./iv_and_ojf_gen_responses.jsonl', help='Path to save Input Validator (IV) and Output Judging Function (OJF) generation responses.')
     parser.add_argument('--ig_gen_responses_save_path', type=str, default='./ig_gen_responses.jsonl', help='Path to save Input Generation (IG) generation responses.')
     parser.add_argument('--test_cases_kit_save_path', type=str, default='./test_cases_kits.jsonl', help='Path to save the generated test cases kits')
     parser.add_argument('--model_name', type=str, default='gpt-4o', help='Name of LLM to use for generation.')
     parser.add_argument('--temperature', type=float, default=0.1, help='Temperature for the LLM.')
-    parser.add_argument('--max_tokens', type=int, default=int(1024 * 2.5), help='Maximum number of tokens for the LLM.')
+    parser.add_argument('--max_tokens', type=int, default=5120, help='Maximum number of tokens for the LLM.')
     parser.add_argument('--num_parallel', type=int, default=100, help='Number of parallel requests to the LLM.')
     args = parser.parse_args()
     logger.info(f"Arguments: {pformat(vars(args))}")
@@ -158,7 +210,16 @@ def parse_args():
 def main():
     args = parse_args()
     
-    pdata_list = datasets.load_dataset(args.dataset_name)['train'].to_list()
+    if os.path.exists(args.dataset_name_or_path):
+        dataset_path = Path(args.dataset_name_or_path)
+        if dataset_path.suffix == '.json':
+            pdata_list = utils.load_json(args.dataset_name_or_path)
+        elif dataset_path.suffix == '.jsonl':
+            pdata_list = utils.load_json_line(args.dataset_name_or_path)
+        else:
+            raise ValueError(f"Unsupported dataset file format: {dataset_path.suffix}")
+    else:
+        pdata_list = datasets.load_dataset(args.dataset_name_or_path)['train'].to_list()
     pid_to_pdata = {pdata['pid']: pdata for pdata in pdata_list}
     if args.target_pids_path:
         target_pids = utils.load_json(args.target_pids_path)
@@ -171,32 +232,32 @@ def main():
     # Generate Input Validator (IV) and Output Judging Function (OJF)
     logger.info("Generating Input Validator (IV) and Output Judging Function (OJF) prompts...")
     iv_and_ojf_gen_prompt_data = []
-    num_problems_without_correct_program = 0
+    num_problems_without_oracle_program = 0
     
     for pid in tqdm(target_pids):
         pdata = pid_to_pdata[pid]
         question_content = pdata['question_content']
-        correct_programs = utils.get_most_reliable_solutions(
+        oracle_programs = utils.get_most_reliable_solutions(
             pdata=pdata,
             language_list=['cpp', 'python3', 'python'],
             lowest_reliability_level=1,
             max_num=1
         )
-        if len(correct_programs) == 0:
-            num_problems_without_correct_program += 1
+        if len(oracle_programs) == 0:
+            num_problems_without_oracle_program += 1
             continue
         else:
-            correct_program = correct_programs[0]['code']
+            oracle_program = oracle_programs[0]['code']
         iv_and_ojf_gen_prompt = get_iv_and_ojf_gen_prompt(
             question_content=question_content,
-            correct_program=correct_program,
+            oracle_program=oracle_program,
             prompt_template=args.iv_and_ojf_gen_prompt_template
         )
         iv_and_ojf_gen_prompt_data.append({
             'pid': pid,
             'iv_and_ojf_gen_prompt': iv_and_ojf_gen_prompt,
         })
-    logger.info(f"Num problems without correct program: {num_problems_without_correct_program}")
+    logger.info(f"Num problems without correct program: {num_problems_without_oracle_program}")
     
     prompt_list = [d['iv_and_ojf_gen_prompt'] for d in iv_and_ojf_gen_prompt_data]
     pid_list = [d['pid'] for d in iv_and_ojf_gen_prompt_data]
@@ -240,24 +301,24 @@ def main():
     
     # Input Generation
     logger.info("Generating Input Generation (IG) prompts...")
-    num_problems_without_correct_program = 0
+    num_problems_without_oracle_program = 0
     num_problems_without_input_validator = 0
 
     ig_gen_prompt_data = []
     for pid in tqdm(target_pids):
         pdata = pid_to_pdata[pid]
         question_content = pdata['question_content']
-        correct_programs = utils.get_most_reliable_solutions(
+        oracle_programs = utils.get_most_reliable_solutions(
             pdata=pdata,
             language_list=['cpp', 'python3', 'python'],
             lowest_reliability_level=1,
             max_num=1
         )
-        if len(correct_programs) == 0:
-            num_problems_without_correct_program += 1
+        if len(oracle_programs) == 0:
+            num_problems_without_oracle_program += 1
             continue
         else:
-            correct_program = correct_programs[0]['code']
+            oracle_program = oracle_programs[0]['code']
         if pid not in pid_to_iv:
             num_problems_without_input_validator += 1
             continue
@@ -265,16 +326,16 @@ def main():
             input_validator = pid_to_iv[pid]
         ig_gen_prompt = get_ig_gen_prompt(
             question_content=question_content,
-            correct_program=correct_program,
+            oracle_program=oracle_program,
             input_validator=input_validator,
-            num_SSI=args.num_SSI,
+            num_LLMGen_input=args.num_LLMGen_input,
             prompt_template= args.ig_gen_prompt_template
         )
         ig_gen_prompt_data.append({
             'pid': pid,
             'ig_gen_prompt': ig_gen_prompt,
         })
-    logger.info(f"Num problems without correct program: {num_problems_without_correct_program}")
+    logger.info(f"Num problems without correct program: {num_problems_without_oracle_program}")
     logger.info(f"Num problems without input validator: {num_problems_without_input_validator}")
     
     prompt_list = [d['ig_gen_prompt'] for d in ig_gen_prompt_data]
@@ -321,3 +382,7 @@ def main():
         )
         test_cases_kit_list.append(test_cases_kit)
     utils.save_json_line(test_cases_kit_list, args.test_cases_kit_save_path)
+    
+if __name__ == '__main__':
+    nest_asyncio.apply()
+    main()
