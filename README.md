@@ -1,5 +1,7 @@
 # HardTests: Synthesizing High-Quality Test Cases for LLM Coding
 
+This is the official repository for the ICLR 2026 paper "HARDTESTGEN: A High-Quality RL Verifier Generation Pipeline for LLM Algorithimic Coding."
+
 🌐 [Project Page](https://leililab.github.io/HardTests/)
 
 ## 📂 Dataset Download
